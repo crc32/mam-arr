@@ -1,0 +1,20 @@
+[Unit]
+Description=MAMArr MCP audiobook service
+Documentation=https://github.com/crc32/mam-arr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%MAMARR_DIR%
+EnvironmentFile=-%MAMARR_DIR%/.env
+ExecStart=%UV_BIN% run --project %MAMARR_DIR% python -m mamarr --transport streamable-http
+Restart=on-failure
+RestartSec=10
+
+# Hardening (compatible with user services)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

@@ -27,10 +27,13 @@ No web UI. No Docker required.
 ### 1. Install
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+git clone https://github.com/crc32/mam-arr.git
+cd mam-arr
+uv sync
+cp env.example .env   # edit with your credentials
 ```
+
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 ### 2. Configure
 
@@ -73,19 +76,19 @@ Required for HTTP transport:
 **Local MCP client (stdio):**
 
 ```bash
-python -m mamarr --transport stdio
+uv run python -m mamarr --transport stdio
 ```
 
 **Network MCP (Streamable HTTP):**
 
 ```bash
-python -m mamarr --transport streamable-http --host 0.0.0.0 --port 8000
+uv run python -m mamarr --transport streamable-http --host 0.0.0.0 --port 8000
 ```
 
 **Direct HTTPS:**
 
 ```bash
-python -m mamarr --transport streamable-http \
+uv run python -m mamarr --transport streamable-http \
   --host 0.0.0.0 --port 8443 \
   --ssl-cert /path/to/fullchain.pem \
   --ssl-key /path/to/privkey.pem
@@ -96,6 +99,35 @@ Or set `SSL_CERT_FILE` and `SSL_KEY_FILE` in `.env`.
 Health check: `GET /health` → `{"status":"ok"}`
 
 MCP endpoint: `POST /mcp` with header `Authorization: Bearer <MCP_AUTH_TOKEN>`
+
+---
+
+## systemd user service (recommended for servers)
+
+Run MAMArr as a persistent user-level service with uv:
+
+```bash
+./scripts/install-systemd-user-service.sh
+systemctl --user enable --now mamarr-mcp.service
+```
+
+The installer writes `~/.config/systemd/user/mamarr-mcp.service`, runs `uv sync`, and substitutes your repo path and `uv` binary.
+
+**Useful commands:**
+
+```bash
+systemctl --user status mamarr-mcp.service
+journalctl --user -u mamarr-mcp.service -f
+systemctl --user restart mamarr-mcp.service
+```
+
+**Run at boot without a login session:**
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+The service reads `.env` from the repo root (`EnvironmentFile`) and starts with `--transport streamable-http`. Set `HOST`, `PORT`, `MCP_AUTH_TOKEN`, and optional `SSL_CERT_FILE` / `SSL_KEY_FILE` in `.env`.
 
 ---
 
