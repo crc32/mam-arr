@@ -14,13 +14,23 @@ from mamarr.favorites import (
     add_series_favorite,
     check_series_updates,
     list_series_favorites,
+    list_tracked_series,
     remove_series_favorite,
     search_with_format_filter,
+    set_series_auto_follow,
 )
 from mamarr.history import list_history, record_download
+from mamarr.inventory.ownership import check_ownership
+from mamarr.inventory.sync import get_library_stats, list_owned_books, sync_library_inventory
 from mamarr.mam.client import get_mam_stats, get_torrent_details
 from mamarr.notifications import send_download_notification
-from mamarr.preferences import get_all_preferences, get_format_preference, set_format_preference
+from mamarr.preferences import (
+    get_all_preferences,
+    get_format_preference,
+    get_ownership_filter_mode,
+    set_format_preference,
+    set_ownership_filter_mode,
+)
 from mamarr.qbit.client import QBittorrentError, qbit_client
 from mamarr.scheduler import start_scheduler, stop_scheduler
 from mamarr.watchlist import (
@@ -51,6 +61,11 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
     @asynccontextmanager
     async def lifespan(_app: FastMCP):
         init_db()
+        if settings.audiobookshelf_url or settings.qbittorrent_url:
+            try:
+                sync_library_inventory()
+            except Exception:
+                pass
         start_scheduler()
         yield
         stop_scheduler()
@@ -59,7 +74,8 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         name="MAMArr",
         instructions=(
             "MyAnonamouse audiobook search and download service. "
-            "Search MAM for audiobooks, manage series favorites and OpenLibrary watchlists, "
+            "Search MAM for audiobooks, sync owned library from Audiobookshelf and qBittorrent, "
+            "manage series tracking and OpenLibrary watchlists, "
             "set audio format preferences (m4a/mp3/none), and send torrents to a remote qBittorrent seedbox."
         ),
         host=settings.host,
@@ -76,7 +92,7 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         query: str,
         field: Literal["title", "author", "series", "narrator"] = "title",
     ) -> str:
-        """Search MyAnonamouse for audiobooks. Results respect the saved audio format preference."""
+        """Search MyAnonamouse for audiobooks. Results respect format and ownership preferences."""
         if not settings.mam_cookie:
             return json.dumps({"error": "MAM_COOKIE is not configured"})
         try:
@@ -86,6 +102,7 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
                     "query": query,
                     "field": field,
                     "format_preference": get_format_preference(),
+                    "ownership_filter": get_ownership_filter_mode(),
                     "count": len(results),
                     "results": results,
                 },
@@ -95,7 +112,11 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     @mcp.tool()
-    def download_audiobook(torrent_id: int, title: Optional[str] = None) -> str:
+    def download_audiobook(
+        torrent_id: int,
+        title: Optional[str] = None,
+        force: bool = False,
+    ) -> str:
         """Download an audiobook torrent from MAM and add it to the configured qBittorrent seedbox."""
         try:
             torrent_data = get_torrent_details(torrent_id) or {}
@@ -106,6 +127,17 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
             filetypes = torrent_data.get("filetypes") or torrent_data.get("filetype") or ""
             cover = find_cover(resolved_title, author)
 
+            if not force:
+                ownership = check_ownership(resolved_title, author, narrator)
+                if ownership.owned:
+                    return json.dumps(
+                        {
+                            "error": "Already owned in library",
+                            "ownership": ownership.to_dict(),
+                            "hint": "Pass force=true to download anyway",
+                        },
+                        indent=2,
+                    )
             qbit_client.add_from_mam(torrent_id, filetypes=filetypes)
             record_download(
                 str(torrent_id),
@@ -162,10 +194,45 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
 
     @mcp.tool()
     def get_audio_format_preference() -> str:
-        """Get the current audio format preference."""
+        """Get the current audio format and ownership filter preferences."""
         return json.dumps(get_all_preferences(), indent=2)
 
-    # ── Series favorites ──────────────────────────────────────────────────────
+    @mcp.tool()
+    def set_ownership_filter(
+        mode: Literal["hide", "mark", "allow"],
+    ) -> str:
+        """
+        Control how owned library items appear in search and series updates.
+        hide: exclude owned books (default)
+        mark: include but flag already_owned
+        allow: no ownership filtering
+        """
+        saved = set_ownership_filter_mode(mode)
+        return json.dumps({"ownership_filter": saved}, indent=2)
+
+    # ── Library inventory ─────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def sync_library_inventory_tool() -> str:
+        """Sync owned audiobooks from Audiobookshelf and qBittorrent into the local inventory."""
+        try:
+            result = sync_library_inventory()
+            return json.dumps(result, indent=2)
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def list_owned_books_tool(limit: int = 100, source: Optional[str] = None) -> str:
+        """List audiobooks in the synced library inventory (Audiobookshelf + qBittorrent)."""
+        items = list_owned_books(limit=min(limit, 500), source=source)
+        return json.dumps({"count": len(items), "items": items}, indent=2)
+
+    @mcp.tool()
+    def get_library_stats_tool() -> str:
+        """Return library inventory statistics and last sync time."""
+        return json.dumps(get_library_stats(), indent=2)
+
+    # ── Series tracking ───────────────────────────────────────────────────────
 
     @mcp.tool()
     def add_series_favorite(series_name: str) -> str:
@@ -191,10 +258,25 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         return json.dumps({"count": len(favorites), "favorites": favorites}, indent=2)
 
     @mcp.tool()
+    def list_tracked_series_tool() -> str:
+        """List all tracked series (manual favorites and series discovered from your library)."""
+        series = list_tracked_series()
+        return json.dumps({"count": len(series), "series": series}, indent=2)
+
+    @mcp.tool()
+    def set_series_auto_follow_tool(series_name: str, auto_follow: bool = True) -> str:
+        """Enable or disable automatic MAM polling for a tracked series."""
+        updated = set_series_auto_follow(series_name, auto_follow)
+        if not updated:
+            return json.dumps({"error": "Series not found"})
+        return json.dumps({"status": "ok", "series": series_name, "auto_follow": auto_follow}, indent=2)
+
+    @mcp.tool()
     def get_series_updates(series_name: Optional[str] = None) -> str:
         """
-        Check favorited series for new MAM audiobooks not seen before.
-        Optionally pass series_name to check a single series.
+        Check tracked series for new MAM audiobooks not seen before.
+        Includes manual favorites and series auto-discovered from your library.
+        Owned books are excluded per ownership_filter preference.
         """
         try:
             result = check_series_updates(series_name=series_name, mark_seen=True)
@@ -285,8 +367,15 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
 
     @mcp.resource("mamarr://favorites")
     def favorites_resource() -> str:
-        """All favorited audiobook series."""
-        return json.dumps(list_series_favorites(), indent=2)
+        """All tracked audiobook series."""
+        return json.dumps(list_tracked_series(), indent=2)
+
+    @mcp.resource("mamarr://library")
+    def library_resource() -> str:
+        """Synced library inventory summary."""
+        stats = get_library_stats()
+        items = list_owned_books(limit=50)
+        return json.dumps({"stats": stats, "sample": items}, indent=2)
 
     @mcp.resource("mamarr://watchlist")
     def watchlist_resource() -> str:

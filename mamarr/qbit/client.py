@@ -85,5 +85,45 @@ class QBittorrentClient:
         torrent_bytes = download_torrent_file(tid)
         self.add_torrent(torrent_bytes, tid, filetypes=filetypes)
 
+    def list_torrents(self, category: str | None = None, tag: str | None = None) -> list[dict]:
+        cookies = self._cookies_or_login()
+        params: dict[str, str] = {}
+        if category:
+            params["category"] = category
+        if tag:
+            params["tag"] = tag
+        response = requests.get(
+            f"{self.base_url}/api/v2/torrents/info",
+            params=params,
+            cookies=cookies,
+            timeout=30,
+        )
+        if not response.ok:
+            raise QBittorrentError(f"qBittorrent list failed: HTTP {response.status_code}")
+        return response.json()
+
+    def list_inventory_torrents(self) -> list[dict]:
+        """Return audiobook torrents in qBittorrent (pipeline inventory)."""
+        category = settings.qbittorrent_inventory_category
+        tag = settings.qbittorrent_inventory_tag
+        try:
+            if category:
+                torrents = self.list_torrents(category=category)
+                if torrents:
+                    return torrents
+        except QBittorrentError:
+            pass
+
+        all_torrents = self.list_torrents()
+        filtered = []
+        for tor in all_torrents:
+            tags = (tor.get("tags") or "").lower()
+            cat = (tor.get("category") or "").lower()
+            if tag and tag.lower() in tags:
+                filtered.append(tor)
+            elif category and cat == category.lower():
+                filtered.append(tor)
+        return filtered
+
 
 qbit_client = QBittorrentClient()

@@ -5,6 +5,7 @@ import requests
 from mamarr.covers import find_cover
 from mamarr.db import get_db, utc_now
 from mamarr.history import record_download
+from mamarr.inventory.ownership import check_ownership
 from mamarr.mam.client import get_torrent_details, search_mam
 from mamarr.notifications import send_watchlist_notification
 from mamarr.qbit.client import QBittorrentClient, qbit_client
@@ -130,6 +131,23 @@ def poll_watchlist(auto_download: bool = True) -> dict:
                     found += 1
                     success = False
                     if qbit and mam_tid:
+                        ownership = check_ownership(
+                            mam_title,
+                            author,
+                            match.get("narrator") or "",
+                        )
+                        if ownership.owned:
+                            conn.execute(
+                                """
+                                UPDATE watchlist
+                                SET mam_found = 1, mam_torrent_id = ?, mam_title = ?,
+                                    last_checked = ?
+                                WHERE id = ?
+                                """,
+                                (str(mam_tid), mam_title, utc_now(), entry["id"]),
+                            )
+                            conn.commit()
+                            continue
                         try:
                             filetypes = match.get("filetype") or match.get("filetypes") or ""
                             qbit.add_from_mam(mam_tid, filetypes=filetypes)
@@ -195,6 +213,12 @@ def download_watchlist_entry(entry_id: int) -> dict:
     title = entry["mam_title"] or entry["title"]
     author = entry["author"] or torrent_data.get("author") or ""
     narrator = torrent_data.get("narrator") or ""
+
+    ownership = check_ownership(title, author, narrator)
+    if ownership.owned:
+        raise ValueError(
+            f"Already owned ({ownership.match_type} via {ownership.source})"
+        )
     size = str(torrent_data.get("size") or "")
     filetypes = torrent_data.get("filetypes") or torrent_data.get("filetype") or ""
     cover = entry["ol_cover_url"] or find_cover(title, author)

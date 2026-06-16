@@ -4,6 +4,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from mamarr.config import settings
 from mamarr.favorites import poll_all_series_favorites
+from mamarr.inventory.sync import sync_library_inventory
 from mamarr.watchlist import poll_watchlist
 
 _scheduler: BackgroundScheduler | None = None
@@ -16,6 +17,13 @@ def start_scheduler() -> BackgroundScheduler | None:
 
     try:
         scheduler = BackgroundScheduler()
+        scheduler.add_job(
+            sync_library_inventory,
+            "interval",
+            hours=settings.library_sync_hours,
+            next_run_time=datetime.datetime.now() + datetime.timedelta(minutes=1),
+            id="library_sync",
+        )
         scheduler.add_job(
             poll_watchlist,
             "interval",

@@ -43,6 +43,14 @@ class Settings:
 
     watchlist_poll_hours: int = int(os.getenv("WATCHLIST_POLL_HOURS", "6"))
     series_favorites_poll_hours: int = int(os.getenv("SERIES_FAVORITES_POLL_HOURS", "6"))
+    library_sync_hours: int = int(os.getenv("LIBRARY_SYNC_HOURS", "12"))
+
+    audiobookshelf_url: str = (os.getenv("AUDIOBOOKSHELF_URL") or "").rstrip("/")
+    audiobookshelf_token: str = os.getenv("AUDIOBOOKSHELF_TOKEN", "")
+    audiobookshelf_library_id: str = os.getenv("AUDIOBOOKSHELF_LIBRARY_ID", "")
+
+    qbittorrent_inventory_category: str = os.getenv("QBITTORRENT_INVENTORY_CATEGORY", "mamarr")
+    qbittorrent_inventory_tag: str = os.getenv("QBITTORRENT_INVENTORY_TAG", "audiobooks")
 
     discord_webhook: str = (os.getenv("DISCORD_WEBHOOK") or "").strip()
 
