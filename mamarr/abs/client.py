@@ -82,6 +82,51 @@ class AudiobookshelfClient:
 
         return all_items
 
+    def iter_library_series(self, library_id: str | None = None) -> list[dict]:
+        lib_id = library_id or self.resolve_library_id()
+        page = 0
+        limit = 100
+        all_series: list[dict] = []
+
+        while True:
+            data = self._get(
+                f"/api/libraries/{lib_id}/series",
+                params={"limit": limit, "page": page},
+            )
+            results = data.get("results", [])
+            all_series.extend(results)
+            total = data.get("total", len(results))
+            if len(all_series) >= total or not results:
+                break
+            page += 1
+
+        return all_series
+
+    @staticmethod
+    def _series_entries(metadata: dict) -> list[dict]:
+        raw = metadata.get("series")
+        if isinstance(raw, dict):
+            return [raw]
+        if isinstance(raw, list):
+            return [entry for entry in raw if isinstance(entry, dict)]
+        return []
+
+    @staticmethod
+    def parse_series(raw: dict) -> Optional[dict]:
+        name = (raw.get("name") or "").strip()
+        series_id = str(raw.get("id") or "").strip()
+        if not name or not series_id:
+            return None
+
+        books = raw.get("books") or []
+        book_ids = [str(book.get("id")) for book in books if book.get("id")]
+        return {
+            "abs_series_id": series_id,
+            "name": name,
+            "book_ids": book_ids,
+            "num_books": len(book_ids),
+        }
+
     @staticmethod
     def parse_item(raw: dict) -> Optional[dict]:
         media = raw.get("media") or {}
@@ -101,17 +146,18 @@ class AudiobookshelfClient:
 
         series = metadata.get("seriesName") or ""
         sequence: Optional[float] = None
-        series_entries = metadata.get("series")
-        if isinstance(series_entries, list) and series_entries:
+        abs_series_id: Optional[str] = None
+        series_entries = AudiobookshelfClient._series_entries(metadata)
+        if series_entries:
             first = series_entries[0]
-            if isinstance(first, dict):
-                series = series or first.get("name") or ""
-                seq_raw = first.get("sequence")
-                if seq_raw is not None:
-                    try:
-                        sequence = float(seq_raw)
-                    except (TypeError, ValueError):
-                        pass
+            series = series or first.get("name") or ""
+            abs_series_id = str(first.get("id") or "").strip() or None
+            seq_raw = first.get("sequence")
+            if seq_raw is not None:
+                try:
+                    sequence = float(seq_raw)
+                except (TypeError, ValueError):
+                    pass
 
         return {
             "external_id": str(raw.get("id") or ""),
@@ -120,6 +166,7 @@ class AudiobookshelfClient:
             "narrator": narrator or "",
             "series": series or "",
             "series_sequence": sequence,
+            "abs_series_id": abs_series_id,
             "asin": (metadata.get("asin") or "").strip() or None,
             "isbn": (metadata.get("isbn") or "").strip() or None,
         }

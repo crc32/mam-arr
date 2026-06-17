@@ -41,6 +41,7 @@ def _upsert_library_item(
     narrator: str,
     series: str,
     series_sequence: Optional[float],
+    abs_series_id: Optional[str],
     asin: Optional[str],
     isbn: Optional[str],
     confidence: str,
@@ -49,14 +50,15 @@ def _upsert_library_item(
         """
         INSERT INTO library_items
             (source, external_id, title, author, narrator, series, series_sequence,
-             asin, isbn, title_key, title_author_key, series_key, confidence, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             abs_series_id, asin, isbn, title_key, title_author_key, series_key, confidence, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, external_id) DO UPDATE SET
             title = excluded.title,
             author = excluded.author,
             narrator = excluded.narrator,
             series = excluded.series,
             series_sequence = excluded.series_sequence,
+            abs_series_id = excluded.abs_series_id,
             asin = excluded.asin,
             isbn = excluded.isbn,
             title_key = excluded.title_key,
@@ -73,6 +75,7 @@ def _upsert_library_item(
             narrator or "",
             series or "",
             series_sequence,
+            abs_series_id,
             asin,
             isbn,
             dedup_key(title, author or "", narrator or ""),
@@ -109,6 +112,7 @@ def _sync_audiobookshelf(conn) -> dict:
             narrator=parsed["narrator"],
             series=parsed["series"],
             series_sequence=parsed["series_sequence"],
+            abs_series_id=parsed.get("abs_series_id"),
             asin=parsed["asin"],
             isbn=parsed["isbn"],
             confidence="high",
@@ -151,6 +155,7 @@ def _sync_qbittorrent(conn) -> dict:
             narrator=parsed["narrator"],
             series="",
             series_sequence=None,
+            abs_series_id=None,
             asin=None,
             isbn=None,
             confidence="medium",
@@ -169,7 +174,88 @@ def _sync_qbittorrent(conn) -> dict:
     return {"status": "ok", "source": "qbittorrent", "count": count}
 
 
-def _refresh_tracked_series_from_library(conn) -> int:
+def _upsert_tracked_series(
+    conn,
+    *,
+    series_key: str,
+    display_name: str,
+    owned_count: int,
+) -> None:
+    existing = conn.execute(
+        "SELECT id, origin FROM tracked_series WHERE series_key = ?",
+        (series_key,),
+    ).fetchone()
+
+    if existing:
+        origin = existing["origin"]
+        if origin == "manual":
+            new_origin = "both"
+        else:
+            new_origin = origin if origin else "library"
+        conn.execute(
+            """
+            UPDATE tracked_series
+            SET display_name = ?, origin = ?, owned_book_count = ?, auto_follow = 1
+            WHERE series_key = ?
+            """,
+            (display_name, new_origin, owned_count, series_key),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO tracked_series
+                (series_key, display_name, origin, auto_follow, owned_book_count, created_at)
+            VALUES (?, ?, 'library', 1, ?, ?)
+            """,
+            (series_key, display_name, owned_count, utc_now()),
+        )
+
+
+def _refresh_tracked_series_from_abs_catalog(conn) -> tuple[int, set[str], bool]:
+    """Use Audiobookshelf's series catalog as the authoritative source."""
+    active_keys: set[str] = set()
+    updated = 0
+
+    try:
+        raw_series = abs_client.iter_library_series()
+    except AudiobookshelfError:
+        return 0, active_keys, False
+
+    for raw in raw_series:
+        parsed = abs_client.parse_series(raw)
+        if not parsed:
+            continue
+
+        series_key = _series_key(parsed["name"])
+        if not series_key:
+            continue
+
+        active_keys.add(series_key)
+        owned_count = parsed["num_books"]
+
+        for book_id in parsed["book_ids"]:
+            conn.execute(
+                """
+                UPDATE library_items
+                SET series = ?, series_key = ?, abs_series_id = ?
+                WHERE source = 'audiobookshelf' AND external_id = ?
+                """,
+                (parsed["name"], series_key, parsed["abs_series_id"], book_id),
+            )
+
+        _upsert_tracked_series(
+            conn,
+            series_key=series_key,
+            display_name=parsed["name"],
+            owned_count=owned_count,
+        )
+        updated += 1
+
+    return updated, active_keys, True
+
+
+def _refresh_tracked_series_from_library_items(conn, active_keys: set[str]) -> int:
+    """Fallback grouping when ABS series catalog is unavailable."""
     rows = conn.execute(
         """
         SELECT series_key, MIN(series) AS display_name, COUNT(*) AS owned_count
@@ -182,38 +268,72 @@ def _refresh_tracked_series_from_library(conn) -> int:
     updated = 0
     for row in rows:
         series_key = row["series_key"]
+        if series_key in active_keys:
+            continue
+
         display = row["display_name"] or series_key
         owned_count = row["owned_count"]
+        active_keys.add(series_key)
+        _upsert_tracked_series(
+            conn,
+            series_key=series_key,
+            display_name=display,
+            owned_count=owned_count,
+        )
+        updated += 1
 
-        existing = conn.execute(
-            "SELECT id, origin FROM tracked_series WHERE series_key = ?",
-            (series_key,),
-        ).fetchone()
+    return updated
 
-        if existing:
-            origin = existing["origin"]
-            if origin == "manual":
-                new_origin = "both"
-            else:
-                new_origin = origin if origin else "library"
+
+def _prune_stale_library_series(conn, active_keys: set[str]) -> int:
+    """Remove library-derived entries that no longer exist in the ABS catalog."""
+    rows = conn.execute(
+        """
+        SELECT series_key, origin
+        FROM tracked_series
+        WHERE origin IN ('library', 'both')
+        """
+    ).fetchall()
+
+    pruned = 0
+    for row in rows:
+        if row["series_key"] in active_keys:
+            continue
+
+        if row["origin"] == "library":
+            conn.execute(
+                "DELETE FROM tracked_series WHERE series_key = ?",
+                (row["series_key"],),
+            )
+            pruned += 1
+        elif row["origin"] == "both":
             conn.execute(
                 """
                 UPDATE tracked_series
-                SET display_name = ?, origin = ?, owned_book_count = ?, auto_follow = 1
+                SET origin = 'manual', owned_book_count = 0, auto_follow = 1
                 WHERE series_key = ?
                 """,
-                (display, new_origin, owned_count, series_key),
+                (row["series_key"],),
             )
+            pruned += 1
+
+    return pruned
+
+
+def _refresh_tracked_series_from_library(conn) -> int:
+    abs_configured = bool(settings.audiobookshelf_url and settings.audiobookshelf_token)
+    active_keys: set[str] = set()
+    updated = 0
+
+    if abs_configured:
+        abs_updated, active_keys, abs_ok = _refresh_tracked_series_from_abs_catalog(conn)
+        updated += abs_updated
+        if abs_ok:
+            updated += _prune_stale_library_series(conn, active_keys)
         else:
-            conn.execute(
-                """
-                INSERT INTO tracked_series
-                    (series_key, display_name, origin, auto_follow, owned_book_count, created_at)
-                VALUES (?, ?, 'library', 1, ?, ?)
-                """,
-                (series_key, display, owned_count, utc_now()),
-            )
-        updated += 1
+            updated += _refresh_tracked_series_from_library_items(conn, active_keys)
+    else:
+        updated += _refresh_tracked_series_from_library_items(conn, active_keys)
 
     return updated
 
