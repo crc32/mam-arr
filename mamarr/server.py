@@ -304,10 +304,11 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         mode: Literal["hide", "mark", "allow"],
     ) -> str:
         """
-        Control how owned library items appear in search and series updates.
+        Control how owned library items appear in general search results.
         hide: exclude owned books (default)
         mark: include but flag already_owned
         allow: no ownership filtering
+        Series gap scans always compare against your library directly.
         """
         saved = set_ownership_filter_mode(mode)
         return json.dumps({"ownership_filter": saved}, indent=2)
