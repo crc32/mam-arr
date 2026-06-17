@@ -22,13 +22,16 @@ from mamarr.favorites import (
 from mamarr.history import list_history, record_download
 from mamarr.inventory.ownership import check_ownership
 from mamarr.inventory.sync import get_library_stats, list_owned_books, sync_library_inventory
-from mamarr.mam.client import get_mam_stats, get_torrent_details
+from mamarr.mam.client import get_mam_stats, get_torrent_details, load_user_data
 from mamarr.mam.bonus import (
     MamBonusError,
     buy_upload_credit,
     convert_all_bonus_to_upload_credit,
+    get_bonus_history,
     get_bonus_points,
 )
+from mamarr.mam.errors import MamError
+from mamarr.mam.network import get_ip_info, update_dynamic_seedbox_ip
 from mamarr.notifications import send_download_notification
 from mamarr.preferences import (
     get_all_preferences,
@@ -122,6 +125,7 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         torrent_id: int,
         title: Optional[str] = None,
         force: bool = False,
+        use_freeleech_wedge: bool = False,
     ) -> str:
         """Download an audiobook torrent from MAM and add it to the configured qBittorrent seedbox."""
         try:
@@ -144,7 +148,11 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
                         },
                         indent=2,
                     )
-            qbit_client.add_from_mam(torrent_id, filetypes=filetypes)
+            qbit_client.add_from_mam(
+                torrent_id,
+                filetypes=filetypes,
+                use_freeleech_wedge=use_freeleech_wedge,
+            )
             record_download(
                 str(torrent_id),
                 resolved_title,
@@ -218,6 +226,58 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
             result.pop("response", None)
             return json.dumps(result, indent=2)
         except MamBonusError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def get_mam_ip_info() -> str:
+        """Return your current IP, ASN, and provider as seen by MyAnonamouse (1 req/min limit)."""
+        try:
+            return json.dumps(get_ip_info(), indent=2)
+        except MamError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def update_mam_dynamic_seedbox_ip() -> str:
+        """
+        Register your current IP as the MAM dynamic seedbox address.
+        Requires an IP/ASN-locked API session (MAM_DYNAMIC_SEEDBOX_COOKIE).
+        Rate limit: once per hour.
+        """
+        try:
+            return json.dumps(update_dynamic_seedbox_ip(), indent=2)
+        except MamError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def get_mam_bonus_history(
+        types: Optional[list[str]] = None,
+    ) -> str:
+        """
+        Return bonus point and wedge transaction history.
+        Optional types: giftPoints, giftWedge, wedgePF, wedgeGFL, torrentThanks, millionaires
+        """
+        try:
+            history = get_bonus_history(types=types)
+            return json.dumps({"count": len(history), "history": history}, indent=2)
+        except MamBonusError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def get_mam_account_details(
+        include_notifications: bool = False,
+        include_client_stats: bool = False,
+        include_snatch_summary: bool = False,
+    ) -> str:
+        """Load extended account data from jsonLoad.php (notifications, clients, snatch summary)."""
+        try:
+            data = load_user_data(
+                include_notifications=include_notifications,
+                include_client_stats=include_client_stats,
+                include_snatch_summary=include_snatch_summary,
+                pretty=True,
+            )
+            return json.dumps(data, indent=2)
+        except MamError as exc:
             return json.dumps({"error": str(exc)})
 
     # ── Format preference ─────────────────────────────────────────────────────

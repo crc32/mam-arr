@@ -1,8 +1,9 @@
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
 from mamarr.config import settings, normalise_mam_cookie
+from mamarr.mam.errors import MamError
 
 
 def mam_headers(referer: str | None = None) -> dict[str, str]:
@@ -21,15 +22,55 @@ def mam_headers(referer: str | None = None) -> dict[str, str]:
     }
 
 
-def _parse_mam_response(raw_bytes: bytes) -> list[dict]:
+def _parse_json_response(raw_bytes: bytes) -> Any:
     import gzip
     import json
 
     try:
-        parsed = json.loads(raw_bytes)
+        return json.loads(raw_bytes)
     except Exception:
-        parsed = json.loads(gzip.decompress(raw_bytes))
+        return json.loads(gzip.decompress(raw_bytes))
 
+
+def load_user_data(
+    *,
+    include_notifications: bool = False,
+    include_client_stats: bool = False,
+    include_snatch_summary: bool = False,
+    pretty: bool = False,
+) -> dict[str, Any]:
+    """Load user data from jsonLoad.php with optional extra sections."""
+    if not settings.mam_cookie:
+        raise MamError("MAM_COOKIE is not configured")
+
+    params: dict[str, str] = {}
+    if include_notifications:
+        params["notif"] = ""
+    if include_client_stats:
+        params["clientStats"] = ""
+    if include_snatch_summary:
+        params["snatch_summary"] = ""
+    if pretty:
+        params["pretty"] = ""
+
+    response = requests.get(
+        f"{settings.mam_base}/jsonLoad.php",
+        params=params or None,
+        headers=mam_headers(),
+        timeout=15,
+        allow_redirects=True,
+    )
+    if "login.php" in response.url or response.status_code != 200:
+        raise MamError("MAM session invalid — check MAM_COOKIE")
+
+    data = _parse_json_response(response.content)
+    if not isinstance(data, dict) or not data.get("username"):
+        raise MamError("Unexpected MAM account response")
+    return data
+
+
+def _parse_mam_response(raw_bytes: bytes) -> list[dict]:
+    parsed = _parse_json_response(raw_bytes)
     if isinstance(parsed, list):
         return parsed
     if isinstance(parsed, dict):
@@ -46,11 +87,12 @@ def search_mam(
     query: str,
     field: str = "title",
     perpage: int = 25,
+    my_snatched_only: bool = False,
 ) -> list[dict]:
     if field not in {"title", "author", "series", "narrator"}:
         field = "title"
 
-    payload = {
+    payload: dict[str, Any] = {
         "tor": {
             "text": query,
             "srchIn": [field],
@@ -63,6 +105,9 @@ def search_mam(
         "thumbnail": "true",
         "description": "true",
     }
+    if my_snatched_only:
+        payload["my_snatched"] = ""
+
     headers = {
         **mam_headers(),
         "Content-Type": "application/json",
@@ -107,9 +152,13 @@ def get_torrent_details(tid: int) -> Optional[dict]:
         return None
 
 
-def download_torrent_file(tid: int) -> bytes:
+def download_torrent_file(tid: int, use_freeleech_wedge: bool = False) -> bytes:
+    params: dict[str, Any] = {"tid": tid}
+    if use_freeleech_wedge:
+        params["fl"] = ""
     response = requests.get(
-        f"{settings.mam_base}/tor/download.php?tid={tid}",
+        f"{settings.mam_base}/tor/download.php",
+        params=params,
         headers=mam_headers(),
         timeout=30,
     )
@@ -118,33 +167,16 @@ def download_torrent_file(tid: int) -> bytes:
 
 
 def get_mam_stats() -> Optional[dict]:
-    import gzip
-    import json
-
-    headers = mam_headers()
     try:
-        response = requests.get(
-            f"{settings.mam_base}/jsonLoad.php",
-            headers=headers,
-            timeout=15,
-            allow_redirects=True,
-        )
-        if "login.php" in response.url or response.status_code != 200:
-            return None
-        raw = response.content
-        try:
-            data = json.loads(raw)
-        except Exception:
-            data = json.loads(gzip.decompress(raw))
-        username = data.get("username")
-        if not username:
-            return None
+        data = load_user_data()
         return {
-            "username": username,
+            "username": data.get("username"),
             "upload": str(data.get("uploaded", "N/A")),
             "download": str(data.get("downloaded", "N/A")),
             "ratio": str(data.get("ratio", "N/A")),
             "bonus_points": int(float(data["seedbonus"])) if data.get("seedbonus") is not None else None,
+            "classname": data.get("classname"),
+            "uid": data.get("uid"),
         }
-    except Exception:
+    except MamError:
         return None

@@ -180,6 +180,10 @@ Authorization: Bearer <MCP_AUTH_TOKEN>
 | `get_mam_bonus_points` | Current bonus points balance |
 | `convert_bonus_points_to_upload_credit` | Spend all affordable BP on upload (Max Affordable) |
 | `buy_upload_credit_with_bonus_points` | Buy specific GiB of upload credit (min 50) |
+| `get_mam_ip_info` | Your IP/ASN as seen by MAM (1 req/min) |
+| `update_mam_dynamic_seedbox_ip` | Register current IP as dynamic seedbox (1 req/hour) |
+| `get_mam_bonus_history` | Bonus point and wedge transaction history |
+| `get_mam_account_details` | Extended jsonLoad.php data (notifications, clients, snatches) |
 | `sync_library_inventory_tool` | Refresh owned books from ABS + qBittorrent |
 | `list_owned_books_tool` | List synced library inventory |
 | `get_library_stats_tool` | Inventory counts and last sync time |

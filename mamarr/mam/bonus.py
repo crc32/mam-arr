@@ -5,41 +5,13 @@ import requests
 
 from mamarr.config import settings, normalise_mam_cookie
 from mamarr.mam.client import mam_headers
-
-
-class MamBonusError(Exception):
-    pass
-
-
-def _load_account_json() -> dict[str, Any]:
-    if not settings.mam_cookie:
-        raise MamBonusError("MAM_COOKIE is not configured")
-
-    response = requests.get(
-        f"{settings.mam_base}/jsonLoad.php",
-        headers=mam_headers(),
-        timeout=15,
-        allow_redirects=True,
-    )
-    if "login.php" in response.url or response.status_code != 200:
-        raise MamBonusError("MAM session invalid — check MAM_COOKIE")
-
-    import gzip
-    import json
-
-    raw = response.content
-    try:
-        data = json.loads(raw)
-    except Exception:
-        data = json.loads(gzip.decompress(raw))
-
-    if not data.get("username"):
-        raise MamBonusError("Unexpected MAM account response")
-    return data
+from mamarr.mam.errors import MamBonusError
 
 
 def get_bonus_points() -> int:
-    data = _load_account_json()
+    from mamarr.mam.client import load_user_data
+
+    data = load_user_data()
     seedbonus = data.get("seedbonus")
     if seedbonus is None:
         raise MamBonusError("Bonus points not found in MAM account response")
@@ -116,3 +88,44 @@ def convert_all_bonus_to_upload_credit() -> dict[str, Any]:
     if result.get("bonus_points_remaining") is not None:
         result["bonus_points_spent"] = points_before - result["bonus_points_remaining"]
     return result
+
+
+BONUS_HISTORY_TYPES = (
+    "giftPoints",
+    "giftWedge",
+    "wedgePF",
+    "wedgeGFL",
+    "torrentThanks",
+    "millionaires",
+)
+
+
+def get_bonus_history(
+    types: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
+    """Return bonus point and wedge transaction history."""
+    if not settings.mam_cookie:
+        raise MamBonusError("MAM_COOKIE is not configured")
+
+    selected = types or list(BONUS_HISTORY_TYPES)
+    params = [("type[]", t) for t in selected]
+
+    response = requests.get(
+        f"{settings.mam_base}/json/userBonusHistory.php",
+        params=params,
+        headers=mam_headers(),
+        timeout=20,
+    )
+    if response.status_code != 200:
+        raise MamBonusError(f"userBonusHistory.php returned HTTP {response.status_code}")
+
+    import json
+
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:
+        raise MamBonusError(f"Invalid JSON from userBonusHistory.php: {response.text[:200]}") from exc
+
+    if not isinstance(data, list):
+        raise MamBonusError("Unexpected bonus history response format")
+    return data

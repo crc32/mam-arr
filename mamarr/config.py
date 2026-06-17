@@ -25,6 +25,10 @@ def normalise_mam_cookie(raw: str) -> str:
 class Settings:
     mam_cookie: str = normalise_mam_cookie(os.getenv("MAM_COOKIE", "") or "")
     mam_base: str = os.getenv("MAM_BASE", "https://www.myanonamouse.net")
+    mam_seedbox_base: str = os.getenv("MAM_SEEDBOX_BASE", "https://t.myanonamouse.net")
+    mam_dynamic_seedbox_cookie: str = normalise_mam_cookie(
+        os.getenv("MAM_DYNAMIC_SEEDBOX_COOKIE", "") or ""
+    )
 
     qbittorrent_url: str = (os.getenv("QBITTORRENT_URL") or "").rstrip("/")
     qbittorrent_user: str = os.getenv("QBITTORRENT_USER", "")

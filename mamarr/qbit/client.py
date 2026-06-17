@@ -79,10 +79,10 @@ class QBittorrentClient:
         if not response.ok:
             raise QBittorrentError(f"qBittorrent add failed: HTTP {response.status_code}")
 
-    def add_from_mam(self, tid: int, filetypes: str = "") -> None:
+    def add_from_mam(self, tid: int, filetypes: str = "", use_freeleech_wedge: bool = False) -> None:
         from mamarr.mam.client import download_torrent_file
 
-        torrent_bytes = download_torrent_file(tid)
+        torrent_bytes = download_torrent_file(tid, use_freeleech_wedge=use_freeleech_wedge)
         self.add_torrent(torrent_bytes, tid, filetypes=filetypes)
 
     def list_torrents(self, category: str | None = None, tag: str | None = None) -> list[dict]:
