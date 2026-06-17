@@ -376,9 +376,10 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
     @mcp.tool()
     def get_series_updates(series_name: Optional[str] = None) -> str:
         """
-        Check tracked series for new MAM audiobooks not seen before.
+        Check tracked series for MAM audiobooks missing from your library.
         Includes manual favorites and series auto-discovered from your library.
-        Owned books are excluded per ownership_filter preference.
+        Notifications are sent only for newly uploaded torrents; missing books
+        are always returned even if seen in a previous scan.
         """
         try:
             result = check_series_updates(series_name=series_name, mark_seen=True)

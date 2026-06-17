@@ -5,7 +5,8 @@ from mamarr.db import get_db, utc_now
 from mamarr.format_filter import apply_format_preference, normalize_text
 from mamarr.history import get_downloaded_ids
 from mamarr.inventory.ownership import filter_results_by_ownership
-from mamarr.mam.client import search_mam
+from mamarr.inventory.series_gaps import find_missing_series_books
+from mamarr.mam.client import search_mam, search_mam_all
 from mamarr.notifications import send_series_update_notification
 from mamarr.preferences import get_format_preference, get_ownership_filter_mode
 
@@ -143,11 +144,10 @@ def _search_series_on_mam(series_name: str) -> list[dict]:
 
     if not settings.mam_cookie:
         return []
-    raw = search_mam(series_name, field="series", perpage=50)
+    raw = search_mam_all(series_name, field="series", perpage=100)
     downloaded_ids = get_downloaded_ids()
     results = [_normalize_torrent(item, downloaded_ids) for item in raw]
-    results = apply_format_preference(results, get_format_preference())
-    return filter_results_by_ownership(results, get_ownership_filter_mode())
+    return apply_format_preference(results, get_format_preference())
 
 
 def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = True) -> dict:
@@ -165,12 +165,14 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
                 "SELECT * FROM tracked_series WHERE auto_follow = 1 ORDER BY display_name"
             ).fetchall()
 
-    all_new: list[dict] = []
-    per_series: dict[str, list[dict]] = {}
+    all_missing: list[dict] = []
+    all_new_uploads: list[dict] = []
+    per_series: dict[str, dict[str, list[dict]]] = {}
 
     for entry in tracked:
         entry_id = entry["id"]
         display = entry["display_name"]
+        series_key = entry["series_key"]
         mam_results = _search_series_on_mam(display)
 
         with get_db() as conn:
@@ -180,21 +182,32 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
             ).fetchall()
         seen_ids = {row["torrent_id"] for row in seen_rows}
 
-        new_for_series: list[dict] = []
-        for item in mam_results:
+        missing_for_series = find_missing_series_books(
+            mam_results,
+            series_key=series_key,
+            series_name=display,
+        )
+
+        new_uploads_for_series: list[dict] = []
+        for item in missing_for_series:
             tid = str(item.get("id", ""))
             if not tid:
                 continue
-            is_new = tid not in seen_ids
-            item["is_new"] = is_new
+            item["is_missing"] = True
+            item["is_new_upload"] = tid not in seen_ids
             item["tracked_series"] = display
             item["series_origin"] = entry["origin"]
-            if is_new:
-                new_for_series.append(item)
-                all_new.append(item)
+            all_missing.append(item)
+            if item["is_new_upload"]:
+                new_uploads_for_series.append(item)
+                all_new_uploads.append(item)
 
-            if mark_seen:
-                with get_db() as conn:
+        if mark_seen:
+            with get_db() as conn:
+                for item in mam_results:
+                    tid = str(item.get("id", ""))
+                    if not tid:
+                        continue
                     conn.execute(
                         """
                         INSERT OR IGNORE INTO series_seen_torrents
@@ -211,11 +224,15 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
                             utc_now(),
                         ),
                     )
-                    conn.commit()
+                conn.commit()
 
-        if new_for_series:
-            per_series[display] = new_for_series
-            send_series_update_notification(display, [i["title"] for i in new_for_series])
+        if missing_for_series:
+            per_series[display] = {
+                "missing": missing_for_series,
+                "new_uploads": new_uploads_for_series,
+            }
+        if new_uploads_for_series:
+            send_series_update_notification(display, [i["title"] for i in new_uploads_for_series])
 
         with get_db() as conn:
             conn.execute(
@@ -227,9 +244,13 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
     return {
         "status": "ok",
         "series_checked": len(tracked),
-        "new_count": len(all_new),
-        "new_books": all_new,
-        "by_series": {name: books for name, books in per_series.items()},
+        "missing_count": len(all_missing),
+        "missing_books": all_missing,
+        "new_upload_count": len(all_new_uploads),
+        "new_uploads": all_new_uploads,
+        "new_count": len(all_missing),
+        "new_books": all_missing,
+        "by_series": per_series,
     }
 
 

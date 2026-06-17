@@ -87,10 +87,13 @@ def search_mam(
     query: str,
     field: str = "title",
     perpage: int = 25,
+    start_number: int = 0,
     my_snatched_only: bool = False,
 ) -> list[dict]:
     if field not in {"title", "author", "series", "narrator"}:
         field = "title"
+
+    perpage = max(5, min(perpage, 100))
 
     payload: dict[str, Any] = {
         "tor": {
@@ -101,6 +104,7 @@ def search_mam(
             "main_cat": ["13"],
             "browse_lang": ["1"],
             "perpage": perpage,
+            "startNumber": str(start_number),
         },
         "thumbnail": "true",
         "description": "true",
@@ -120,6 +124,35 @@ def search_mam(
     )
     response.raise_for_status()
     return _parse_mam_response(response.content)
+
+
+def search_mam_all(
+    query: str,
+    field: str = "title",
+    perpage: int = 100,
+    max_pages: int = 10,
+    my_snatched_only: bool = False,
+) -> list[dict]:
+    """Fetch all pages of MAM search results up to max_pages."""
+    all_results: list[dict] = []
+    start = 0
+
+    for _ in range(max_pages):
+        page = search_mam(
+            query,
+            field=field,
+            perpage=perpage,
+            start_number=start,
+            my_snatched_only=my_snatched_only,
+        )
+        if not page:
+            break
+        all_results.extend(page)
+        if len(page) < perpage:
+            break
+        start += perpage
+
+    return all_results
 
 
 def get_torrent_details(tid: int) -> Optional[dict]:
