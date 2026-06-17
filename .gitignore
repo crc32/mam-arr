@@ -9,6 +9,8 @@ cookies.txt
 *.sqlite3
 backend/data/app.db
 backend/data/*.db
+data/
+data/*.db
 
 # VSCode
 .vscode/

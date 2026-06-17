@@ -1,157 +1,306 @@
-# 🎧 MAMArr WebApp
+# MAMArr MCP
 
-Self-hosted web interface for **MyAnonamouse** audiobook lovers.  
-Search, preview, and send torrents directly to **qBittorrent** — with optional **Discord notifications** and full Docker support.
+MyAnonamouse audiobook search and download service exposed as a **Model Context Protocol (MCP)** server. Use it with Hermes, OpenClaw, Claude Desktop, Claude Code, and other MCP-aware clients.
 
----
+Search MAM for audiobooks, sync your **Audiobookshelf + qBittorrent library** to avoid duplicates, auto-track **series from owned books**, maintain an **OpenLibrary watchlist**, set **audio format preferences** (M4A/M4B, MP3, or none), and send torrents to a **remote qBittorrent seedbox**.
 
-## 🚀 Features
-
-✅ **FastAPI Backend** — Handles user auth, MAM search, and torrent management  
-✅ **React + Tailwind Frontend** — Responsive UI with cover art and toast notifications  
-✅ **qBittorrent Integration** — Send torrents straight to your client  
-✅ **Discord Webhook** — Get notified when new torrents are added  
-✅ **Docker Ready** — One-command deployment on any server or NAS  
-✅ **Nginx Frontend Hosting** — Optimized static serving for lightweight setups  
+No web UI. No Docker required.
 
 ---
 
-## 🧩 Project Structure
+## Features
 
-```
-mam-webapp/
-├── backend/
-│   ├── main.py              # FastAPI backend
-│   ├── requirements.txt
-│   ├── .env.example         # Example environment variables
-│
-├── frontend/
-│   ├── src/                 # React app source
-│   ├── index.css            # Tailwind styles
-│   ├── App.jsx              # Main UI logic
-│   ├── vite.config.mjs
-│   ├── Dockerfile           # Nginx + build container
-│
-├── docker-compose.yml       # Stack definition
-├── README.md
-└── LICENSE
-```
+- **MCP tools** for search, download, library sync, series tracking, watchlist, and preferences
+- **Library inventory** — sync owned books from Audiobookshelf + qBittorrent pipeline
+- **Duplicate prevention** — owned books hidden from search/updates; download blocked unless `force=true`
+- **Remote qBittorrent** — works with seedboxes over HTTPS
+- **Series tracking** — manual favorites plus auto-discovery from your library
+- **Format preference** — prefer M4A/M4B or MP3; falls back when only the other format exists
+- **OpenLibrary watchlist** — watch for books not yet on MAM, with background polling
+- **HTTP bearer auth** for network deployments
+- **Direct HTTPS** via TLS cert/key or reverse-proxy termination
 
 ---
 
-## ⚙️ Environment Setup
+## Quick Start
 
-Create a `.env` file inside `backend/` based on the provided `.env.example`:
+### 1. Install
 
-```env
-# Example .env
-
-# --- MyAnonamouse ---
-MAM_COOKIE=YOUR_MAM_COOKIE_HERE
-MAM_BASE=https://www.myanonamouse.net
-
-# --- qBittorrent ---
-QBITTORRENT_URL=http://qbittorrent:8080
-QBITTORRENT_USER=admin
-QBITTORRENT_PASS=adminadmin
-QBITTORRENT_SAVEPATH=/media/audiobooks
-
-# --- App ---
-JWT_SECRET=change_this_secret_key
-INVITE_CODE=invite-only-secret
-
-# --- Optional Discord Webhook ---
-DISCORD_WEBHOOK=https://discord.com/api/webhooks/XXXXXXXX
-```
-
----
-
-## 🔑 Getting Your MAM ID and Cookie
-
-You’ll need both a **MAM ID** and a **Cookie** for API access:
-
-1. **Log in** to [MyAnonamouse.net](https://www.myanonamouse.net)
-2. Go to **Profile → Security**
-3. Copy your **Security Identifier (MAM ID)**  
-4. Open **Developer Tools → Application → Cookies**
-5. Copy the entire **`mam_id`** or **`uid`** cookie value
-6. Add both to your `.env` file
-
-⚠️ **Never share your MAM cookie or ID publicly!**
-
----
-
-## 🐳 Docker Deployment
-
-### Build & Start
 ```bash
-docker compose up -d --build
+git clone https://github.com/crc32/mam-arr.git
+cd mam-arr
+uv sync
+cp env.example .env   # edit with your credentials
 ```
 
-### Stop
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### 2. Configure
+
+Copy `env.example` to `.env` and fill in your credentials:
+
 ```bash
-docker compose down
+cp env.example .env
 ```
 
-### Verify
+Required for search/download:
+
+| Variable | Description |
+|----------|-------------|
+| `MAM_COOKIE` | Your MAM `mam_id` session cookie |
+| `QBITTORRENT_URL` | qBittorrent Web UI URL (e.g. `https://seedbox.example.com/qbittorrent`) |
+| `QBITTORRENT_USER` | qBittorrent username |
+| `QBITTORRENT_PASS` | qBittorrent password |
+| `QBITTORRENT_SAVEPATH` | Save path on the seedbox |
+
+Optional for library inventory (recommended):
+
+| Variable | Description |
+|----------|-------------|
+| `AUDIOBOOKSHELF_URL` | Audiobookshelf server URL |
+| `AUDIOBOOKSHELF_TOKEN` | API token from ABS Settings → Users |
+| `AUDIOBOOKSHELF_LIBRARY_ID` | Optional; auto-detects first book library |
+| `QBITTORRENT_INVENTORY_CATEGORY` | qBit category for owned torrents (default: `mamarr`) |
+| `QBITTORRENT_INVENTORY_TAG` | qBit tag fallback for owned torrents (default: `audiobooks`) |
+| `LIBRARY_SYNC_HOURS` | How often to refresh inventory (default: 12) |
+
+Required for HTTP transport:
+
+| Variable | Description |
+|----------|-------------|
+| `MCP_AUTH_TOKEN` | Bearer token clients must send |
+| `MCP_SERVER_URL` | Public URL of this server (e.g. `https://mamarr.example.com`) |
+
+### 3. Run
+
+**Local MCP client (stdio):**
+
 ```bash
-curl http://localhost:5747/api/test
-# {"status":"ok"}
+uv run python -m mamarr --transport stdio
+```
+
+**Network MCP (Streamable HTTP):**
+
+```bash
+uv run python -m mamarr --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+**Direct HTTPS:**
+
+```bash
+uv run python -m mamarr --transport streamable-http \
+  --host 0.0.0.0 --port 8443 \
+  --ssl-cert /path/to/fullchain.pem \
+  --ssl-key /path/to/privkey.pem
+```
+
+Or set `SSL_CERT_FILE` and `SSL_KEY_FILE` in `.env`.
+
+Health check: `GET /health` → `{"status":"ok"}`
+
+MCP endpoint: `POST /mcp` with header `Authorization: Bearer <MCP_AUTH_TOKEN>`
+
+---
+
+## systemd user service (recommended for servers)
+
+Run MAMArr as a persistent user-level service with uv:
+
+```bash
+./scripts/install-systemd-user-service.sh
+systemctl --user enable --now mamarr-mcp.service
+```
+
+The installer writes `~/.config/systemd/user/mamarr-mcp.service`, runs `uv sync`, and substitutes your repo path and `uv` binary.
+
+**Useful commands:**
+
+```bash
+systemctl --user status mamarr-mcp.service
+journalctl --user -u mamarr-mcp.service -f
+systemctl --user restart mamarr-mcp.service
+```
+
+**Run at boot without a login session:**
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+The service reads `.env` from the repo root (`EnvironmentFile`) and starts with `--transport streamable-http`. Set `HOST`, `PORT`, `MCP_AUTH_TOKEN`, and optional `SSL_CERT_FILE` / `SSL_KEY_FILE` in `.env`.
+
+---
+
+## MCP Client Configuration
+
+### Claude Desktop / local stdio
+
+```json
+{
+  "mcpServers": {
+    "mamarr": {
+      "command": "python",
+      "args": ["-m", "mamarr", "--transport", "stdio"],
+      "env": {
+        "MAM_COOKIE": "your_cookie",
+        "QBITTORRENT_URL": "https://your-seedbox/qbittorrent",
+        "QBITTORRENT_USER": "admin",
+        "QBITTORRENT_PASS": "password",
+        "QBITTORRENT_SAVEPATH": "/audiobooks"
+      }
+    }
+  }
+}
+```
+
+### Remote HTTP (Hermes, OpenClaw, etc.)
+
+Configure your client to connect to:
+
+```
+https://your-host.example.com/mcp
+```
+
+With authentication:
+
+```
+Authorization: Bearer <MCP_AUTH_TOKEN>
 ```
 
 ---
 
-## 🌐 Reverse Proxy (Optional)
+## MCP Tools
 
-You can expose both services via **Nginx Proxy Manager** (or Caddy, Traefik, etc.):
+| Tool | Description |
+|------|-------------|
+| `search_audiobooks` | Search MAM; applies format + ownership filters |
+| `download_audiobook` | Send a torrent to qBittorrent (`force=true` to override ownership) |
+| `get_download_history` | List recent downloads |
+| `get_mam_account_stats` | MAM upload/download ratio and bonus points |
+| `get_mam_bonus_points` | Current bonus points balance |
+| `convert_bonus_points_to_upload_credit` | Spend all affordable BP on upload (Max Affordable) |
+| `buy_upload_credit_with_bonus_points` | Buy specific GiB of upload credit (min 50) |
+| `get_mam_ip_info` | Your IP/ASN as seen by MAM (1 req/min) |
+| `update_mam_dynamic_seedbox_ip` | Register current IP as dynamic seedbox (1 req/hour) |
+| `get_mam_bonus_history` | Bonus point and wedge transaction history |
+| `get_mam_account_details` | Extended jsonLoad.php data (notifications, clients, snatches) |
+| `sync_library_inventory_tool` | Refresh owned books from ABS + qBittorrent |
+| `list_owned_books_tool` | List synced library inventory |
+| `get_library_stats_tool` | Inventory counts and last sync time |
+| `set_audio_format_preference` | Set `m4a`, `mp3`, or `none` |
+| `set_ownership_filter` | Set `hide`, `mark`, or `allow` for owned books in results |
+| `get_audio_format_preference` | Read current preferences |
+| `add_series_favorite` | Manually favorite a series |
+| `remove_series_favorite` | Remove manual follow (library series become auto_follow=0) |
+| `list_series_favorites_tool` | List manual favorites |
+| `list_tracked_series_tool` | List all tracked series (manual + library-derived) |
+| `set_series_auto_follow_tool` | Enable/disable MAM polling for a series |
+| `get_series_updates` | Find new unowned books in tracked series |
+| `search_openlibrary_books` | Browse OpenLibrary to add to watchlist |
+| `list_watchlist_entries` | List watchlist with MAM match status |
+| `add_watchlist_book` | Add an OpenLibrary book to watchlist |
+| `remove_watchlist_book` | Remove a watchlist entry |
+| `poll_watchlist_now` | Manually poll MAM for watchlist matches |
+| `download_watchlist_book` | Download a found watchlist entry |
 
+## MCP Resources
 
-| Service | Example URL                | Internal Port |
-|----------|---------------------------|----------------|
-| Frontend | https://mam.yourdomain.uk | 5050 |
-| Backend  | https://api.yourdomain.uk | 5747 |
-
-✅ Ensure both use **HTTPS** and **WebSockets** are enabled.
-
----
-
-## 🪩 Example Workflow
-
-1. Login or register with your invite code  
-2. Search audiobooks by **title**, **author**, **series**, or **narrator**  
-3. Preview cover art (from **iTunes** / **Google Books**)  
-4. Click **“Add to qBittorrent”**  
-5. A modern toast appears on-screen  
-6. (Optional) Discord webhook sends a styled notification  
-
----
-
-## 📦 Tech Stack
-
-| Layer | Technology |
-|-------|-------------|
-| Backend | FastAPI (Python 3.12) |
-| Frontend | React + Vite + TailwindCSS |
-| Database | SQLite |
-| Notifications | Discord Webhook |
-| Deployment | Docker / Docker Compose |
-| Proxy | Nginx Proxy Manager |
-
-—
-
-<img width="1920" height="898" alt="image" src="https://github.com/user-attachments/assets/1b3c6b43-f5ed-4acd-8478-5c3771edf5d7" />
-
-<img width="1881" height="1043" alt="image" src="https://github.com/user-attachments/assets/2beea17c-f630-445e-9342-364df8f2fad3" />
-
-
-## 🧠 Credits
-
-Created by [**(ipillyx)**](https://github.com/ipillyx)  
-Built with ❤️ for the MAM community.
+| URI | Content |
+|-----|---------|
+| `mamarr://preferences` | Format and ownership preferences |
+| `mamarr://library` | Library inventory stats + sample |
+| `mamarr://favorites` | Tracked series list |
+| `mamarr://watchlist` | OpenLibrary watchlist |
+| `mamarr://history` | Download history |
 
 ---
 
-## 📝 License
+## Format Preference
 
-MIT License © 2025 
+When preference is `m4a` or `mp3`:
 
+1. Results are grouped by **title + author + narrator** (separates re-recordings and same-title collisions).
+2. If the preferred format exists, only that version is returned.
+3. If only the non-preferred format exists, that version is returned as fallback.
+
+`m4b` is treated as `m4a`.
+
+Set via tool or it persists in SQLite:
+
+```
+set_audio_format_preference(preference="m4a")
+```
+
+---
+
+## Library Inventory
+
+MAMArr syncs owned audiobooks from two sources:
+
+1. **Audiobookshelf** — canonical metadata (title, author, narrator, series, ASIN)
+2. **qBittorrent** — pipeline inventory (torrents in `mamarr` category or `audiobooks` tag)
+
+After sync, series found in your library are auto-tracked for new MAM releases.
+
+**Ownership matching** (in order): ASIN → ISBN → title+author+narrator → title+author
+
+**Default behavior:** owned books are hidden from search and series updates. Downloads are blocked unless `force=true`.
+
+```
+sync_library_inventory_tool()
+list_owned_books_tool(limit=50)
+set_ownership_filter(mode="hide")   # hide | mark | allow
+```
+
+Background sync runs every `LIBRARY_SYNC_HOURS` (default 12).
+
+---
+
+## Series Tracking
+
+Manual favorites plus series auto-discovered from your library:
+
+```
+add_series_favorite(series_name="The Expanse")
+list_tracked_series_tool()
+get_series_updates()
+set_series_auto_follow_tool(series_name="The Expanse", auto_follow=true)
+```
+
+Background polling runs every `SERIES_FAVORITES_POLL_HOURS` (default 6).
+
+---
+
+## Project Layout
+
+```
+mamarr/
+├── __main__.py          # CLI entry point
+├── server.py            # FastMCP tools and resources
+├── config.py            # Environment settings
+├── db.py                # SQLite schema
+├── mam/client.py        # MAM API
+├── abs/client.py        # Audiobookshelf API
+├── inventory/           # Library sync + ownership matching
+├── qbit/client.py       # qBittorrent API (remote seedbox)
+├── favorites.py         # Series tracking
+├── watchlist.py         # OpenLibrary watchlist
+├── format_filter.py     # M4A/MP3 preference logic
+├── covers.py            # Cover art lookup
+├── history.py           # Download history
+├── preferences.py       # Saved preferences
+├── scheduler.py         # Background polling
+└── auth.py              # Bearer token verification
+```
+
+---
+
+## Legacy Web App
+
+The previous React + Docker web interface remains in `frontend/` and `backend/` for reference but is no longer the primary interface. Use the MCP service instead.
+
+---
+
+## License
+
+MIT
