@@ -156,6 +156,8 @@ def _migrate_library_items_columns(cur: sqlite3.Cursor) -> None:
         cur.execute("ALTER TABLE library_items ADD COLUMN title_author_key TEXT NOT NULL DEFAULT ''")
     if "abs_series_id" not in columns:
         cur.execute("ALTER TABLE library_items ADD COLUMN abs_series_id TEXT")
+    if "filetypes" not in columns:
+        cur.execute("ALTER TABLE library_items ADD COLUMN filetypes TEXT")
 
 
 def _migrate_series_favorites(cur: sqlite3.Cursor) -> None:

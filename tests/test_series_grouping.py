@@ -83,10 +83,11 @@ class RefreshTrackedSeriesTests(unittest.TestCase):
                 narrator="",
                 series=title,
                 series_sequence=float(idx),
-                abs_series_id=None,
-                asin=None,
-                isbn=None,
-                confidence="high",
+            abs_series_id=None,
+            asin=None,
+            isbn=None,
+            filetypes=None,
+            confidence="high",
             )
             conn.execute(
                 """

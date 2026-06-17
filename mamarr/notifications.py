@@ -43,6 +43,29 @@ def send_series_update_notification(series_name: str, new_titles: list[str]) -> 
         pass
 
 
+def send_series_swap_notification(series_name: str, swap_titles: list[str]) -> None:
+    if not settings.discord_webhook or not swap_titles:
+        return
+    try:
+        lines = "\n".join(f"• {t}" for t in swap_titles[:10])
+        extra = f"\n…and {len(swap_titles) - 10} more" if len(swap_titles) > 10 else ""
+        content = {
+            "username": "MAMArr MCP",
+            "embeds": [
+                {
+                    "title": f"M4B swap available: {series_name}",
+                    "description": (
+                        "MP3 owned — M4B/M4A now on MAM:\n" + lines + extra
+                    ),
+                    "color": 0x3B82F6,
+                }
+            ],
+        }
+        requests.post(settings.discord_webhook, json=content, timeout=5)
+    except Exception:
+        pass
+
+
 def send_watchlist_notification(title: str, author: str, mam_tid: str, auto_downloaded: bool) -> None:
     if not settings.discord_webhook:
         return

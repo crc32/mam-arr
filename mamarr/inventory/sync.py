@@ -4,7 +4,7 @@ from typing import Optional
 from mamarr.abs.client import AudiobookshelfError, abs_client
 from mamarr.config import settings
 from mamarr.db import get_db, utc_now
-from mamarr.format_filter import dedup_key, normalize_text
+from mamarr.format_filter import dedup_key, formats_from_qbit_tags, normalize_text
 from mamarr.inventory.ownership import title_author_key
 from mamarr.qbit.client import QBittorrentError, qbit_client
 
@@ -44,14 +44,16 @@ def _upsert_library_item(
     abs_series_id: Optional[str],
     asin: Optional[str],
     isbn: Optional[str],
+    filetypes: Optional[str],
     confidence: str,
 ) -> None:
     conn.execute(
         """
         INSERT INTO library_items
             (source, external_id, title, author, narrator, series, series_sequence,
-             abs_series_id, asin, isbn, title_key, title_author_key, series_key, confidence, synced_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             abs_series_id, asin, isbn, filetypes, title_key, title_author_key, series_key,
+             confidence, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, external_id) DO UPDATE SET
             title = excluded.title,
             author = excluded.author,
@@ -61,6 +63,7 @@ def _upsert_library_item(
             abs_series_id = excluded.abs_series_id,
             asin = excluded.asin,
             isbn = excluded.isbn,
+            filetypes = excluded.filetypes,
             title_key = excluded.title_key,
             title_author_key = excluded.title_author_key,
             series_key = excluded.series_key,
@@ -78,6 +81,7 @@ def _upsert_library_item(
             abs_series_id,
             asin,
             isbn,
+            filetypes,
             dedup_key(title, author or "", narrator or ""),
             title_author_key(title, author or ""),
             _series_key(series) if series else None,
@@ -115,6 +119,7 @@ def _sync_audiobookshelf(conn) -> dict:
             abs_series_id=parsed.get("abs_series_id"),
             asin=parsed["asin"],
             isbn=parsed["isbn"],
+            filetypes=None,
             confidence="high",
         )
         count += 1
@@ -146,6 +151,7 @@ def _sync_qbittorrent(conn) -> dict:
             continue
         seen_hashes.add(info_hash)
         parsed = _parse_qbit_name(tor.get("name") or "")
+        filetypes = formats_from_qbit_tags(tor.get("tags") or "")
         _upsert_library_item(
             conn,
             source="qbittorrent",
@@ -158,6 +164,7 @@ def _sync_qbittorrent(conn) -> dict:
             abs_series_id=None,
             asin=None,
             isbn=None,
+            filetypes=filetypes or None,
             confidence="medium",
         )
         count += 1

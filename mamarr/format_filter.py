@@ -21,6 +21,29 @@ def parse_filetypes(filetypes: str) -> set[str]:
     return {t.strip().lower() for t in (filetypes or "").split(",") if t.strip()}
 
 
+M4_FORMATS = frozenset({"m4a", "m4b"})
+AUDIO_FORMAT_TAGS = frozenset({"mp3", "m4a", "m4b", "flac", "aac", "ogg"})
+
+
+def has_m4_format(filetypes: str) -> bool:
+    return bool(parse_filetypes(filetypes) & M4_FORMATS)
+
+
+def owned_is_mp3_only(formats: set[str]) -> bool:
+    if not formats:
+        return False
+    return "mp3" in formats and not (formats & M4_FORMATS)
+
+
+def formats_from_qbit_tags(tags: str) -> str:
+    found: list[str] = []
+    for tag in (tags or "").split(","):
+        normalized = tag.strip().lower()
+        if normalized in AUDIO_FORMAT_TAGS:
+            found.append(normalized)
+    return ",".join(dict.fromkeys(found))
+
+
 def has_format(filetypes: str, preference: AudioFormatPreference) -> bool:
     if preference == "none":
         return True

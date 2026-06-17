@@ -5,9 +5,10 @@ from mamarr.db import get_db, utc_now
 from mamarr.format_filter import apply_format_preference, normalize_text
 from mamarr.history import get_downloaded_ids
 from mamarr.inventory.ownership import filter_results_by_ownership
+from mamarr.inventory.format_swap import find_potential_swaps, load_seen_torrent_ids
 from mamarr.inventory.series_gaps import find_missing_series_books, load_seen_book_keys, mam_book_identity_key
 from mamarr.mam.client import search_mam, search_mam_all
-from mamarr.notifications import send_series_update_notification
+from mamarr.notifications import send_series_swap_notification, send_series_update_notification
 from mamarr.preferences import get_format_preference, get_ownership_filter_mode
 
 
@@ -139,15 +140,18 @@ def _normalize_torrent(item: dict, downloaded_ids: set[str]) -> dict:
     }
 
 
-def _search_series_on_mam(series_name: str) -> list[dict]:
+def _fetch_series_mam_results(series_name: str) -> list[dict]:
     from mamarr.config import settings
 
     if not settings.mam_cookie:
         return []
     raw = search_mam_all(series_name, field="series", perpage=100)
     downloaded_ids = get_downloaded_ids()
-    results = [_normalize_torrent(item, downloaded_ids) for item in raw]
-    return apply_format_preference(results, get_format_preference())
+    return [_normalize_torrent(item, downloaded_ids) for item in raw]
+
+
+def _search_series_on_mam(series_name: str) -> list[dict]:
+    return apply_format_preference(_fetch_series_mam_results(series_name), get_format_preference())
 
 
 def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = True) -> dict:
@@ -167,18 +171,28 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
 
     all_missing: list[dict] = []
     all_new_uploads: list[dict] = []
+    all_potential_swaps: list[dict] = []
+    all_new_swaps: list[dict] = []
     per_series: dict[str, dict[str, list[dict]]] = {}
 
     for entry in tracked:
         entry_id = entry["id"]
         display = entry["display_name"]
         series_key = entry["series_key"]
-        mam_results = _search_series_on_mam(display)
+        raw_results = _fetch_series_mam_results(display)
+        mam_results = apply_format_preference(raw_results, get_format_preference())
 
         seen_book_keys = load_seen_book_keys(entry_id, display)
+        seen_torrent_ids = load_seen_torrent_ids(entry_id)
 
         missing_for_series = find_missing_series_books(
             mam_results,
+            series_key=series_key,
+            series_name=display,
+        )
+
+        swaps_for_series = find_potential_swaps(
+            raw_results,
             series_key=series_key,
             series_name=display,
         )
@@ -200,9 +214,23 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
                 new_uploads_for_series.append(item)
                 all_new_uploads.append(item)
 
+        new_swaps_for_series: list[dict] = []
+        for item in swaps_for_series:
+            tid = str(item.get("id", ""))
+            if not tid:
+                continue
+            item["tracked_series"] = display
+            item["series_origin"] = entry["origin"]
+            item["torrent_id"] = tid
+            item["is_new_swap"] = tid not in seen_torrent_ids
+            all_potential_swaps.append(item)
+            if item["is_new_swap"]:
+                new_swaps_for_series.append(item)
+                all_new_swaps.append(item)
+
         if mark_seen:
             with get_db() as conn:
-                for item in mam_results:
+                for item in raw_results:
                     tid = str(item.get("id", ""))
                     if not tid:
                         continue
@@ -224,13 +252,17 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
                     )
                 conn.commit()
 
-        if missing_for_series:
+        if missing_for_series or swaps_for_series:
             per_series[display] = {
                 "missing": missing_for_series,
                 "new_uploads": new_uploads_for_series,
+                "potential_swaps": swaps_for_series,
+                "new_swaps": new_swaps_for_series,
             }
         if new_uploads_for_series:
             send_series_update_notification(display, [i["title"] for i in new_uploads_for_series])
+        if new_swaps_for_series:
+            send_series_swap_notification(display, [i["title"] for i in new_swaps_for_series])
 
         with get_db() as conn:
             conn.execute(
@@ -246,6 +278,10 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
         "missing_books": all_missing,
         "new_upload_count": len(all_new_uploads),
         "new_uploads": all_new_uploads,
+        "potential_swap_count": len(all_potential_swaps),
+        "potential_swaps": all_potential_swaps,
+        "new_swap_count": len(all_new_swaps),
+        "new_swaps": all_new_swaps,
         "new_count": len(all_missing),
         "new_books": all_missing,
         "by_series": per_series,
