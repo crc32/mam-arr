@@ -144,6 +144,7 @@ def get_mam_stats() -> Optional[dict]:
             "upload": str(data.get("uploaded", "N/A")),
             "download": str(data.get("downloaded", "N/A")),
             "ratio": str(data.get("ratio", "N/A")),
+            "bonus_points": int(float(data["seedbonus"])) if data.get("seedbonus") is not None else None,
         }
     except Exception:
         return None

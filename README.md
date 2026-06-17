@@ -176,7 +176,10 @@ Authorization: Bearer <MCP_AUTH_TOKEN>
 | `search_audiobooks` | Search MAM; applies format + ownership filters |
 | `download_audiobook` | Send a torrent to qBittorrent (`force=true` to override ownership) |
 | `get_download_history` | List recent downloads |
-| `get_mam_account_stats` | MAM upload/download ratio |
+| `get_mam_account_stats` | MAM upload/download ratio and bonus points |
+| `get_mam_bonus_points` | Current bonus points balance |
+| `convert_bonus_points_to_upload_credit` | Spend all affordable BP on upload (Max Affordable) |
+| `buy_upload_credit_with_bonus_points` | Buy specific GiB of upload credit (min 50) |
 | `sync_library_inventory_tool` | Refresh owned books from ABS + qBittorrent |
 | `list_owned_books_tool` | List synced library inventory |
 | `get_library_stats_tool` | Inventory counts and last sync time |

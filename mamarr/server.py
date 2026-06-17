@@ -23,6 +23,12 @@ from mamarr.history import list_history, record_download
 from mamarr.inventory.ownership import check_ownership
 from mamarr.inventory.sync import get_library_stats, list_owned_books, sync_library_inventory
 from mamarr.mam.client import get_mam_stats, get_torrent_details
+from mamarr.mam.bonus import (
+    MamBonusError,
+    buy_upload_credit,
+    convert_all_bonus_to_upload_credit,
+    get_bonus_points,
+)
 from mamarr.notifications import send_download_notification
 from mamarr.preferences import (
     get_all_preferences,
@@ -172,11 +178,47 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
 
     @mcp.tool()
     def get_mam_account_stats() -> str:
-        """Return MyAnonamouse upload/download ratio stats."""
+        """Return MyAnonamouse upload/download ratio and bonus points."""
         stats = get_mam_stats()
         if not stats:
             return json.dumps({"error": "Could not fetch MAM stats — check MAM_COOKIE"})
         return json.dumps(stats, indent=2)
+
+    @mcp.tool()
+    def get_mam_bonus_points() -> str:
+        """Return current MyAnonamouse bonus points balance."""
+        try:
+            points = get_bonus_points()
+            return json.dumps({"bonus_points": points}, indent=2)
+        except MamBonusError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def convert_bonus_points_to_upload_credit() -> str:
+        """
+        Convert all affordable bonus points into upload credit via the MAM bonus store.
+        Uses amount='Max Affordable ' (minimum purchase 50 GiB).
+        """
+        try:
+            result = convert_all_bonus_to_upload_credit()
+            # Trim raw API response from tool output
+            result.pop("response", None)
+            return json.dumps(result, indent=2)
+        except MamBonusError as exc:
+            return json.dumps({"error": str(exc)})
+
+    @mcp.tool()
+    def buy_upload_credit_with_bonus_points(amount_gb: int) -> str:
+        """
+        Buy a specific amount of upload credit (GiB) with bonus points.
+        amount_gb must be an integer >= 50.
+        """
+        try:
+            result = buy_upload_credit(amount_gb)
+            result.pop("response", None)
+            return json.dumps(result, indent=2)
+        except MamBonusError as exc:
+            return json.dumps({"error": str(exc)})
 
     # ── Format preference ─────────────────────────────────────────────────────
 
