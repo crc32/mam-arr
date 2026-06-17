@@ -89,6 +89,55 @@ class CheckSeriesUpdatesTests(unittest.TestCase):
 
     @patch("mamarr.favorites.search_mam_all")
     @patch("mamarr.inventory.series_gaps.get_owned_books_for_series")
+    def test_new_torrent_for_same_book_is_not_a_new_upload(
+        self,
+        mock_owned,
+        mock_search,
+    ):
+        from mamarr.favorites import check_series_updates
+
+        mock_search.return_value = [
+            {"id": 202, "title": "Book Two", "author": "Author", "narrator": "Narrator A", "filetype": "mp3"},
+        ]
+        mock_owned.return_value = [
+            {
+                "title": "Book One",
+                "author": "Author",
+                "narrator": "",
+                "asin": None,
+                "isbn": None,
+                "title_key": "book one|author|",
+                "title_author_key": "book one|author",
+            }
+        ]
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """
+            INSERT INTO tracked_series
+                (series_key, display_name, origin, auto_follow, owned_book_count, created_at)
+            VALUES ('test series', 'Test Series', 'manual', 1, 1, '2026-01-01T00:00:00')
+            """
+        )
+        tracked_id = conn.execute("SELECT id FROM tracked_series").fetchone()[0]
+        conn.execute(
+            """
+            INSERT INTO series_seen_torrents
+                (tracked_series_id, torrent_id, title, author, narrator, filetypes, first_seen_at)
+            VALUES (?, '101', 'Book Two', 'Author', 'Narrator B', 'm4b', '2026-01-01T00:00:00')
+            """,
+            (tracked_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        result = check_series_updates(series_name="Test Series", mark_seen=False)
+
+        self.assertEqual(result["missing_count"], 1)
+        self.assertEqual(result["new_upload_count"], 0)
+
+    @patch("mamarr.favorites.search_mam_all")
+    @patch("mamarr.inventory.series_gaps.get_owned_books_for_series")
     def test_missing_books_surface_even_when_torrent_was_seen_before(
         self,
         mock_owned,

@@ -5,7 +5,7 @@ from mamarr.db import get_db, utc_now
 from mamarr.format_filter import apply_format_preference, normalize_text
 from mamarr.history import get_downloaded_ids
 from mamarr.inventory.ownership import filter_results_by_ownership
-from mamarr.inventory.series_gaps import find_missing_series_books
+from mamarr.inventory.series_gaps import find_missing_series_books, load_seen_book_keys, mam_book_identity_key
 from mamarr.mam.client import search_mam, search_mam_all
 from mamarr.notifications import send_series_update_notification
 from mamarr.preferences import get_format_preference, get_ownership_filter_mode
@@ -175,12 +175,7 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
         series_key = entry["series_key"]
         mam_results = _search_series_on_mam(display)
 
-        with get_db() as conn:
-            seen_rows = conn.execute(
-                "SELECT torrent_id FROM series_seen_torrents WHERE tracked_series_id = ?",
-                (entry_id,),
-            ).fetchall()
-        seen_ids = {row["torrent_id"] for row in seen_rows}
+        seen_book_keys = load_seen_book_keys(entry_id, display)
 
         missing_for_series = find_missing_series_books(
             mam_results,
@@ -193,10 +188,13 @@ def check_series_updates(series_name: Optional[str] = None, mark_seen: bool = Tr
             tid = str(item.get("id", ""))
             if not tid:
                 continue
+            book_key = item.get("book_identity_key") or mam_book_identity_key(item, display)
+            item["book_identity_key"] = book_key
             item["is_missing"] = True
-            item["is_new_upload"] = tid not in seen_ids
+            item["is_new_upload"] = book_key not in seen_book_keys
             item["tracked_series"] = display
             item["series_origin"] = entry["origin"]
+            item["torrent_id"] = tid
             all_missing.append(item)
             if item["is_new_upload"]:
                 new_uploads_for_series.append(item)

@@ -379,8 +379,9 @@ def create_mcp_server(*, require_http_auth: bool = False) -> FastMCP:
         """
         Check tracked series for MAM audiobooks missing from your library.
         Includes manual favorites and series auto-discovered from your library.
-        Notifications are sent only for newly uploaded torrents; missing books
-        are always returned even if seen in a previous scan.
+        Notifications are sent only for newly discovered books (by title+author
+        within the series, not per torrent ID). Torrent IDs are still recorded
+        for reference. Missing books are always returned even if seen before.
         """
         try:
             result = check_series_updates(series_name=series_name, mark_seen=True)

@@ -6,6 +6,14 @@ from mamarr.format_filter import dedup_key, normalize_text
 from mamarr.inventory.ownership import check_ownership, title_author_key
 
 
+def mam_book_identity_key(item: dict, series_name: str) -> str:
+    return series_book_key(
+        item.get("title") or "",
+        item.get("author") or "",
+        series_name,
+    )
+
+
 def normalize_series_title(title: str, series_name: str = "") -> str:
     """Normalize a book title within a series for fuzzy comparison."""
     text = normalize_text(title)
@@ -18,6 +26,27 @@ def normalize_series_title(title: str, series_name: str = "") -> str:
     text = re.sub(r"^(?:book\s*)?\d+\s*[-.:)]\s*", "", text)
     text = re.sub(r"^\d+\s+", "", text)
     return text.strip()
+
+
+def series_book_key(title: str, author: str, series_name: str = "") -> str:
+    """Canonical identity for a book within a series (ignores encoding/torrent)."""
+    return "|".join((normalize_series_title(title, series_name), normalize_text(author)))
+
+
+def load_seen_book_keys(tracked_series_id: int, series_name: str) -> set[str]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT title, author
+            FROM series_seen_torrents
+            WHERE tracked_series_id = ?
+            """,
+            (tracked_series_id,),
+        ).fetchall()
+    return {
+        series_book_key(row["title"] or "", row["author"] or "", series_name)
+        for row in rows
+    }
 
 
 def get_owned_books_for_series(series_key: str) -> list[dict]:
@@ -124,14 +153,11 @@ def find_missing_series_books(
         if is_book_owned_for_series(item, series_name, owned_books):
             continue
 
-        dedupe_key = dedup_key(
-            item.get("title") or "",
-            item.get("author") or "",
-            item.get("narrator") or "",
-        )
-        if dedupe_key in seen_titles:
+        identity_key = mam_book_identity_key(item, series_name)
+        if identity_key in seen_titles:
             continue
-        seen_titles.add(dedupe_key)
+        seen_titles.add(identity_key)
+        item["book_identity_key"] = identity_key
         missing.append(item)
 
     return missing
